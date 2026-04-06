@@ -4,15 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-// محاولة جلب أداة المعالجة الأوتوماتيكية (ستعمل على اللينكس ولن تعطل الويندوز)
-let Compiler = null;
-let loadImage = null;
-try {
-  Compiler = require('mind-ar/src/image-target/compiler').Compiler;
-  loadImage = require('canvas').loadImage;
-} catch (e) {
-  console.log("⚠️ [تنبيه]: أدوات الدمج غير محملة للويندوز، تعمل آلياً على الخادم السحابي Linux فقط.");
-}
+// سيتم استدعاء المكتبات ديناميكياً داخل دالة الدمج لتجنب أخطاء بدء التشغيل
 
 const app = express();
 app.use(cors());
@@ -51,7 +43,18 @@ app.get('/api/targets', (req, res) => {
 
 // الدالة السحرية للدمج التلقائي في السيرفر السحابي
 async function rebuildMindFile(data) {
-  if (!Compiler || !loadImage) return; 
+  let Compiler, loadImage, createCanvas;
+  try {
+     const mindar = await import('mind-ar/dist/mindar-image-compiler.prod.js');
+     Compiler = mindar.Compiler;
+     const canvasPkg = require('canvas');
+     loadImage = canvasPkg.loadImage;
+     createCanvas = canvasPkg.createCanvas;
+  } catch(e) {
+     console.log("⚠️ لم يتم العثور على مكتبات الدمج:", e.message);
+     return;
+  }
+
   try {
     const compiler = new Compiler();
     const loadedImages = [];
@@ -60,7 +63,12 @@ async function rebuildMindFile(data) {
     for (let i = 0; i < data.targets.length; i++) {
         const imgPath = path.join(__dirname, data.targets[i].imageUrl.replace('/uploads/', 'uploads/'));
         const img = await loadImage(imgPath);
-        loadedImages.push(img);
+        
+        // تحويل الصورة لبيكسلات (Canvas) لضمان توافقها 100% مع MindAR في Node
+        const canvas = createCanvas(img.width, img.height);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        loadedImages.push(canvas);
     }
     
     if(loadedImages.length === 0) return;
@@ -70,8 +78,8 @@ async function rebuildMindFile(data) {
     });
     
     // حفظ النتيجة النهائية 
-    const buffer = compiler.exportData();
-    fs.writeFileSync(path.join(__dirname, 'uploads', 'targets.mind'), buffer);
+    const buffer = await compiler.exportData();
+    fs.writeFileSync(path.join(__dirname, 'uploads', 'targets.mind'), Buffer.from(buffer));
     console.log("✅ [السيرفر] اكتمل دمج الصور وتم حفظ ملف targets.mind بنجاح!");
   } catch (error) {
     console.error("❌ خظأ في بناء السيرفر لملف المايند:", error);
