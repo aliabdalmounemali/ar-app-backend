@@ -4,8 +4,6 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-// سيتم استدعاء المكتبات ديناميكياً داخل دالة الدمج لتجنب أخطاء بدء التشغيل
-
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -36,69 +34,14 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
+// جلب كل الأهداف المسجلة
 app.get('/api/targets', (req, res) => {
   const data = JSON.parse(fs.readFileSync(dbPath));
   res.json(data.targets);
 });
 
-// الدالة السحرية للدمج التلقائي في السيرفر السحابي
-async function rebuildMindFile(data) {
-  let Compiler, loadImage, createCanvas;
-  try {
-     // محاولة استيراد المحرك بأكثر من مسار متوقع لضمان التوافق مع Railway
-     let mindar;
-     try {
-        mindar = await import('mind-ar/dist/mindar-image-compiler.prod.js');
-     } catch (e1) {
-        try {
-           mindar = await import('mind-ar/src/image-target/compiler.js');
-        } catch (e2) {
-           console.log("❌ تعذر العثور على مكتبة MindAR في المسارات المعروفة.");
-           return;
-        }
-     }
-     
-     Compiler = mindar.Compiler;
-     const canvasPkg = require('canvas');
-     loadImage = canvasPkg.loadImage;
-     createCanvas = canvasPkg.createCanvas;
-  } catch(e) {
-     console.log("⚠️ فشل تحميل المكتبات الأساسية:", e.message);
-     return;
-  }
-
-  try {
-    const compiler = new Compiler();
-    const loadedImages = [];
-    
-    // جلب كل الصور الموجودة بالترتيب ودمجها 
-    for (let i = 0; i < data.targets.length; i++) {
-        const imgPath = path.join(__dirname, data.targets[i].imageUrl.replace('/uploads/', 'uploads/'));
-        const img = await loadImage(imgPath);
-        
-        // تحويل الصورة لبيكسلات (Canvas) لضمان توافقها 100% مع MindAR في Node
-        const canvas = createCanvas(img.width, img.height);
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0);
-        loadedImages.push(canvas);
-    }
-    
-    if(loadedImages.length === 0) return;
-
-    await compiler.compileImageTargets(loadedImages, (progress) => {
-        console.log(`[السيرفر] جاري الدمج الأوتوماتيكي للصور: ${Math.round(progress)}%`);
-    });
-    
-    // حفظ النتيجة النهائية 
-    const buffer = await compiler.exportData();
-    fs.writeFileSync(path.join(__dirname, 'uploads', 'targets.mind'), Buffer.from(buffer));
-    console.log("✅ [السيرفر] اكتمل دمج الصور وتم حفظ ملف targets.mind بنجاح!");
-  } catch (error) {
-    console.error("❌ خظأ في بناء السيرفر لملف المايند:", error);
-  }
-}
-
-app.post('/api/targets', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'model', maxCount: 1 }]), async (req, res) => {
+// إضافة هدف جديد (صورة + مجسم)
+app.post('/api/targets', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'model', maxCount: 1 }]), (req, res) => {
   if (!req.files['image'] || !req.files['model']) {
     return res.status(400).json({ error: 'Image and model required' });
   }
@@ -111,18 +54,15 @@ app.post('/api/targets', upload.fields([{ name: 'image', maxCount: 1 }, { name: 
     name: req.body.name || `ارتباط ${data.targets.length + 1}`,
     imageUrl: `/uploads/images/${req.files['image'][0].filename}`,
     modelUrl: `/uploads/models/${req.files['model'][0].filename}`,
-    index: reqIndex // أوتوماتيكي
+    index: reqIndex
   };
   
   data.targets.push(newTarget);
   fs.writeFileSync(dbPath, JSON.stringify(data));
-
-  // 🚀 السحر هنا: ننتظر حتى ينتهي الدمج تماماً قبل أن نخبر المستخدم "تم بنجاح"
-  await rebuildMindFile(data);
-  
   res.json(newTarget);
 });
 
+// حذف هدف
 app.delete('/api/targets/:id', (req, res) => {
     let data = JSON.parse(fs.readFileSync(dbPath));
     const targetIndex = data.targets.findIndex(t => t.id === req.params.id);
@@ -131,20 +71,19 @@ app.delete('/api/targets/:id', (req, res) => {
         data.targets.forEach((tar, idx) => tar.index = idx);
         fs.writeFileSync(dbPath, JSON.stringify(data));
         res.json({ success: true, targets: data.targets });
-        
-        // إعادة الدمج أوتوماتيكياً بعد الحذف لعدم ترك خلل
-        rebuildMindFile(data);
     } else {
         res.status(404).json({ error: 'not found' });
     }
 });
 
+// استقبال ملف .mind المدمج من لوحة التحكم (المتصفح هو من يقوم بالدمج)
 app.post('/api/compile', upload.single('mind'), (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'Mind file required' });
     const oldPath = req.file.path;
     const newPath = path.join(__dirname, 'uploads', 'targets.mind');
     if (fs.existsSync(newPath)) fs.unlinkSync(newPath);
     fs.renameSync(oldPath, newPath);
+    console.log("✅ تم استقبال وحفظ ملف targets.mind بنجاح!");
     res.json({ success: true, mindUrl: '/uploads/targets.mind' });
 });
 
