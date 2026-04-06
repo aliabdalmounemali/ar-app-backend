@@ -45,13 +45,25 @@ app.get('/api/targets', (req, res) => {
 async function rebuildMindFile(data) {
   let Compiler, loadImage, createCanvas;
   try {
-     const mindar = await import('mind-ar/dist/mindar-image-compiler.prod.js');
+     // محاولة استيراد المحرك بأكثر من مسار متوقع لضمان التوافق مع Railway
+     let mindar;
+     try {
+        mindar = await import('mind-ar/dist/mindar-image-compiler.prod.js');
+     } catch (e1) {
+        try {
+           mindar = await import('mind-ar/src/image-target/compiler.js');
+        } catch (e2) {
+           console.log("❌ تعذر العثور على مكتبة MindAR في المسارات المعروفة.");
+           return;
+        }
+     }
+     
      Compiler = mindar.Compiler;
      const canvasPkg = require('canvas');
      loadImage = canvasPkg.loadImage;
      createCanvas = canvasPkg.createCanvas;
   } catch(e) {
-     console.log("⚠️ لم يتم العثور على مكتبات الدمج:", e.message);
+     console.log("⚠️ فشل تحميل المكتبات الأساسية:", e.message);
      return;
   }
 
@@ -86,7 +98,7 @@ async function rebuildMindFile(data) {
   }
 }
 
-app.post('/api/targets', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'model', maxCount: 1 }]), (req, res) => {
+app.post('/api/targets', upload.fields([{ name: 'image', maxCount: 1 }, { name: 'model', maxCount: 1 }]), async (req, res) => {
   if (!req.files['image'] || !req.files['model']) {
     return res.status(400).json({ error: 'Image and model required' });
   }
@@ -104,10 +116,11 @@ app.post('/api/targets', upload.fields([{ name: 'image', maxCount: 1 }, { name: 
   
   data.targets.push(newTarget);
   fs.writeFileSync(dbPath, JSON.stringify(data));
-  res.json(newTarget);
 
-  // تشغيل الدمج الأوتوماتيكي في الخلفية
-  rebuildMindFile(data);
+  // 🚀 السحر هنا: ننتظر حتى ينتهي الدمج تماماً قبل أن نخبر المستخدم "تم بنجاح"
+  await rebuildMindFile(data);
+  
+  res.json(newTarget);
 });
 
 app.delete('/api/targets/:id', (req, res) => {
